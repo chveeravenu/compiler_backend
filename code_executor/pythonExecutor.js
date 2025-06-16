@@ -1,50 +1,54 @@
-const fs = require("fs-extra");
-const { v4: uuid } = require("uuid");
-const { exec } = require("child_process");
-const path = require("path");
+const fs = require('fs-extra');
+const path = require('path');
+const { v4: uuidv4 } = require('uuid');
+const { spawn } = require('child_process');
 
-const executePython = async (code, testCases) => {
-  const jobId = uuid();
-  const filename = `${jobId}.py`;
-  const filepath = path.join(__dirname, "..", "temp", filename);
+const runPython = async (code, inputs) => {
+  const jobId = uuidv4();
+  const filePath = path.join(__dirname, '..', 'temp', `${jobId}.py`);
 
-  await fs.writeFile(filepath, code);
+  // Write code to file
+  await fs.outputFile(filePath, code);
 
   const results = [];
 
-  for (let i = 0; i < testCases.length; i++) {
-    const input = testCases[i].input;
-    const expectedOutput = testCases[i].expectedOutput;
+  for (const input of inputs) {
+    const result = await new Promise((resolve, reject) => {
+      const process = spawn('python3', [filePath]);
+      let output = '';
+      let error = '';
 
-    const command = `docker run --rm -i -v "${filepath}:/app/code.py" python:3.10 python /app/code.py`;
+      process.stdin.write(input + '\n');
+      process.stdin.end();
 
-    const result = await new Promise((resolve) => {
-      const process = exec(command, (error, stdout, stderr) => {
+      process.stdout.on('data', (data) => {
+        output += data.toString();
+      });
+
+      process.stderr.on('data', (data) => {
+        error += data.toString();
+      });
+
+      process.on('close', (code) => {
         if (error) {
-          resolve({
-            input,
-            output: stderr || error.message,
-            passed: false,
-          });
+          resolve({ input, output: error.trim(), passed: false });
         } else {
-          const output = stdout.trim();
-          resolve({
-            input,
-            output,
-            passed: output === expectedOutput,
-          });
+          resolve({ input, output: output.trim(), passed: true });
         }
       });
 
-      process.stdin.write(input);
-      process.stdin.end();
+      process.on('error', (err) => {
+        reject(err);
+      });
     });
 
     results.push(result);
   }
 
-  await fs.unlink(filepath); // cleanup
+  // Cleanup
+  await fs.remove(filePath);
+
   return results;
 };
 
-module.exports = executePython;
+module.exports = runPython;
