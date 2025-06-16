@@ -14,32 +14,38 @@ const runPython = async (code, inputs) => {
 
   for (const input of inputs) {
     const result = await new Promise((resolve, reject) => {
-      const process = spawn('python3', [filePath]);
-      let output = '';
-      let error = '';
+      try {
+        const process = spawn('python3', [filePath]);
 
-      process.stdin.write(input + '\n');
-      process.stdin.end();
+        let output = '';
+        let error = '';
 
-      process.stdout.on('data', (data) => {
-        output += data.toString();
-      });
+        process.stdout.on('data', (data) => {
+          output += data.toString();
+        });
 
-      process.stderr.on('data', (data) => {
-        error += data.toString();
-      });
+        process.stderr.on('data', (data) => {
+          error += data.toString();
+        });
 
-      process.on('close', (code) => {
-        if (error) {
-          resolve({ input, output: error.trim(), passed: false });
-        } else {
-          resolve({ input, output: output.trim(), passed: true });
-        }
-      });
+        process.on('close', (code) => {
+          if (error) {
+            resolve({ input, output: error.trim(), passed: false });
+          } else {
+            resolve({ input, output: output.trim(), passed: true });
+          }
+        });
 
-      process.on('error', (err) => {
-        reject(err);
-      });
+        process.on('error', (err) => {
+          resolve({ input, output: `Error: ${err.message}`, passed: false });
+        });
+
+        // Write input *after* process is ready
+        process.stdin.write(input + '\n');
+        process.stdin.end();
+      } catch (err) {
+        resolve({ input, output: `Exception: ${err.message}`, passed: false });
+      }
     });
 
     results.push(result);
