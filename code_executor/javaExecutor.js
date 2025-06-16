@@ -1,56 +1,71 @@
-const { spawn } = require('child_process');
-const fs = require('fs');
+const fs = require('fs-extra');
 const path = require('path');
-const { generateFile } = require('../utils/fileManager');
+const { v4: uuidv4 } = require('uuid');
+const { spawn } = require('child_process');
 
-const executeJava = async (code, inputList) => {
-  const filePath = await generateFile('java', code);
-  const dir = path.dirname(filePath);
-  const className = path.basename(filePath, '.java');
+const runJava = async (code, inputs) => {
+  const jobId = uuidv4();
+  const dir = path.join(__dirname, '..', 'temp', jobId);
+  const filePath = path.join(dir, 'Main.java');
+
+  await fs.ensureDir(dir);
+  await fs.outputFile(filePath, code);
+
+  const compile = spawn('javac', [filePath]);
 
   return new Promise((resolve, reject) => {
-    const compile = spawn('javac', [filePath]);
-
+    let compileErr = '';
     compile.stderr.on('data', (data) => {
-      return reject({ error: data.toString() });
+      compileErr += data.toString();
     });
 
-    compile.on('close', async (status) => {
-      if (status !== 0) return;
+    compile.on('close', async (code) => {
+      if (compileErr) {
+        resolve(inputs.map(input => ({
+          input,
+          output: compileErr.trim(),
+          passed: false
+        })));
+        await fs.remove(dir);
+        return;
+      }
 
-      const results = await Promise.all(
-        inputList.map((input) => {
-          return new Promise((resolve) => {
-            const run = spawn('java', ['-cp', dir, className]);
+      const results = [];
 
-            let output = '';
-            let error = '';
+      for (const input of inputs) {
+        const result = await new Promise((resolveTest) => {
+          const run = spawn('java', ['Main'], { cwd: dir });
 
-            run.stdin.write(input);
-            run.stdin.end();
+          let output = '';
+          let error = '';
 
-            run.stdout.on('data', (data) => {
-              output += data.toString();
-            });
+          run.stdout.on('data', (data) => {
+            output += data.toString();
+          });
 
-            run.stderr.on('data', (data) => {
-              error += data.toString();
-            });
+          run.stderr.on('data', (data) => {
+            error += data.toString();
+          });
 
-            run.on('close', () => {
-              resolve({
-                input,
-                output: error ? error.trim() : output.trim(),
-                passed: error === '',
-              });
+          run.on('close', () => {
+            resolveTest({
+              input,
+              output: error ? error.trim() : output.trim(),
+              passed: !error
             });
           });
-        })
-      );
 
+          run.stdin.write(input + '\n');
+          run.stdin.end();
+        });
+
+        results.push(result);
+      }
+
+      await fs.remove(dir);
       resolve(results);
     });
   });
 };
 
-module.exports = executeJava;
+module.exports = runJava;

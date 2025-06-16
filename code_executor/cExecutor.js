@@ -1,68 +1,67 @@
-const fs = require("fs-extra");
-const { v4: uuid } = require("uuid");
-const { spawn } = require("child_process");
-const path = require("path");
+const runC = async (code, inputs) => {
+  const jobId = uuidv4();
+  const dir = path.join(__dirname, '..', 'temp', jobId);
+  const filePath = path.join(dir, 'main.c');
+  const outPath = path.join(dir, 'a.out');
 
-const executeC = async (code, testCases) => {
-  const jobId = uuid();
-  const filename = `${jobId}.c`;
-  const filepath = path.join(__dirname, "..", "temp", filename);
+  await fs.ensureDir(dir);
+  await fs.outputFile(filePath, code);
 
-  await fs.writeFile(filepath, code);
+  const compile = spawn('gcc', [filePath, '-o', outPath]);
 
-  const results = [];
-
-  for (let i = 0; i < testCases.length; i++) {
-    const input = testCases[i].input;
-    const expectedOutput = testCases[i].expectedOutput;
-
-    const command = [
-      "run", "--rm", "-i",
-      "-v", `${filepath}:/app/code.c`,
-      "gcc:latest", "sh", "-c",
-      "gcc /app/code.c -o /app/code.out && /app/code.out"
-    ];
-
-    const result = await new Promise((resolve) => {
-      const process = spawn("docker", command);
-
-      let stdout = "";
-      let stderr = "";
-
-      process.stdin.write(input);
-      process.stdin.end();
-
-      process.stdout.on("data", (data) => {
-        stdout += data.toString();
-      });
-
-      process.stderr.on("data", (data) => {
-        stderr += data.toString();
-      });
-
-      process.on("close", () => {
-        const output = stdout.trim();
-        resolve({
-          input,
-          output,
-          passed: output === expectedOutput,
-        });
-      });
-
-      process.on("error", (err) => {
-        resolve({
-          input,
-          output: err.message,
-          passed: false,
-        });
-      });
+  return new Promise((resolve, reject) => {
+    let compileErr = '';
+    compile.stderr.on('data', (data) => {
+      compileErr += data.toString();
     });
 
-    results.push(result);
-  }
+    compile.on('close', async () => {
+      if (compileErr) {
+        resolve(inputs.map(input => ({
+          input,
+          output: compileErr.trim(),
+          passed: false
+        })));
+        await fs.remove(dir);
+        return;
+      }
 
-  await fs.unlink(filepath); // Cleanup
-  return results;
+      const results = [];
+
+      for (const input of inputs) {
+        const result = await new Promise((resolveTest) => {
+          const run = spawn(outPath);
+
+          let output = '';
+          let error = '';
+
+          run.stdout.on('data', (data) => {
+            output += data.toString();
+          });
+
+          run.stderr.on('data', (data) => {
+            error += data.toString();
+          });
+
+          run.on('close', () => {
+            resolveTest({
+              input,
+              output: error ? error.trim() : output.trim(),
+              passed: !error
+            });
+          });
+
+          run.stdin.write(input + '\n');
+          run.stdin.end();
+        });
+
+        results.push(result);
+      }
+
+      await fs.remove(dir);
+      resolve(results);
+    });
+  });
 };
 
-module.exports = executeC;
+module.exports = runC;
