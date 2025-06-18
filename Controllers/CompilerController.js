@@ -1,9 +1,7 @@
 const express = require('express');
 const mydb = require('../Models/CompileModel');
-const runPython  = require("../code_executor/pythonExecutor.js");
-const runCpp  = require("../code_executor/cppExecutor.js");
-const runJava   = require("../code_executor/javaExecutor.js");
-const runC  = require("../code_executor/cExecutor.js");
+
+const axios = require("axios");
 
 const dummy = async (req, res) => {
   console.log('API hit: /dummy');
@@ -27,45 +25,73 @@ const getRandomProblem = async (req, res) => {
   }
 };
 
-const runcod = async (req,res) =>{
-  const { language, code, inputs } = req.body;
 
-  if (!language || !code || !Array.isArray(inputs)) {
-    return res.status(400).json({ error: 'Missing or invalid parameters.' });
-  }
-
+const runcod = async (req, res) => {
   try {
-    let results;
+    const { language, version, code, testCases } = req.body;
 
-    switch (language.toLowerCase()) {
-      case 'python':
-        results = await runPython(code, inputs);
-        break;
-
-      case 'cpp':
-        results = await runCpp(code, inputs);
-        break;
-
-      case 'c':
-        results = await runC(code, inputs);
-        break;
-
-      case 'java':
-        results = await runJava(code, inputs);
-        break;
-
-      default:
-        return res.status(400).json({ error: 'Unsupported language.' });
+    if (!language || !version || !code || !Array.isArray(testCases)) {
+      return res.status(400).json({ error: "Missing required fields." });
     }
 
-    return res.status(200).json({ status: 'success', results });
+    const results = [];
 
-  } catch (err) {
-    console.error('Execution Error:', err);
-    return res.status(500).json({ error: 'Server error during code execution.' });
+    for (const testCase of testCases) {
+      const { input, expectedOutput } = testCase;
+
+      const payload = {
+        language,
+        version,
+        files: [
+          {
+            name: `main.${getFileExtension(language)}`,
+            content: code,
+          },
+        ],
+        stdin: input,
+      };
+
+      const pistonRes = await axios.post("https://emkc.org/api/v2/piston/execute", payload);
+      const actualOutput = pistonRes.data.run.stdout.trim();
+      const status = actualOutput === expectedOutput.trim() ? "pass" : "fail";
+
+      results.push({
+        input,
+        expected: expectedOutput,
+        actual: actualOutput,
+        status,
+      });
+    }
+
+    return res.json({ results });
+
+  } catch (error) {
+    console.error("Error running code:", error?.response?.data || error.message);
+    return res.status(500).json({ error: "Something went wrong while executing the code." });
   }
-
 };
+
+// Helper to determine file extension based on language
+function getFileExtension(language) {
+  switch (language.toLowerCase()) {
+    case "python":
+      return "py";
+    case "cpp":
+    case "c++":
+      return "cpp";
+    case "c":
+      return "c";
+    case "java":
+      return "java";
+    case "javascript":
+      return "js";
+    default:
+      return "txt";
+  }
+}
+
+
+
 
 
 module.exports = {
